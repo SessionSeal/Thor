@@ -86,6 +86,8 @@ def wait_for_nudge() -> bool:
         time.sleep(5)
         return False
     msgs = resp.get("Messages", [])
+    if msgs:
+        print(f"[thor] nudged by sqs ({len(msgs)} message(s))", flush=True)
     for m in msgs:
         # The message is only a wake-up signal — delete immediately; the
         # fallback poll covers any message loss.
