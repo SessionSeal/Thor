@@ -11,13 +11,15 @@ deleted on receipt: they carry no state, the DB does. Run:
 
 import json
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
 
-from . import pg, product  # pg loads .env before boto3 reads the environment
+from . import pg, product, store  # pg loads .env before boto3 reads it
 
 import boto3
 
@@ -32,8 +34,27 @@ _sqs = (boto3.client("sqs", region_name=os.environ.get("AWS_REGION", "ap-south-1
 
 def process(job: dict) -> dict:
     p = job["payload"]
+    rid = str(job["record_id"])
+    if "master_key" in p:
+        # v2 payload: assets-store keys — fetch inputs to a scratch dir
+        tmp = Path(tempfile.mkdtemp(prefix=f"seal_{rid[:8]}_"))
+        try:
+            master = store.fetch_asset(p["master_key"],
+                                       tmp / f"master_{p['master_name']}")
+            stems = [store.fetch_asset(k, tmp / f"stem_{i}_{n}")
+                     for i, (k, n) in enumerate(
+                         zip(p["stem_keys"], p["stem_names"]))]
+            project = store.fetch_asset(p["project_key"], tmp / "project.zip")
+            return product.register(
+                record_id=rid, artist=p["artist"],
+                master_path_in=master, stem_paths_in=stems,
+                project_zip_path=project, master_name=p["master_name"],
+                user_id=p.get("user_id"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    # v1 payload: absolute local paths (legacy multipart intake)
     return product.register(
-        record_id=str(job["record_id"]),
+        record_id=rid,
         artist=p["artist"],
         master_path_in=Path(p["master_path"]),
         stem_paths_in=[Path(s) for s in p["stem_paths"]],

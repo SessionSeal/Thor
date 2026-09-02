@@ -29,12 +29,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import soundfile as sf
 
-from . import audio, fingerprint, hashing, manifest, pg, same_origin
+from . import audio, fingerprint, hashing, manifest, pg, same_origin, store
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
 STORAGE_DIR = Path(os.environ.get(
@@ -143,9 +144,9 @@ def _build_manifest(record_id: str, created_at: str, *, master_sha: str,
 
 def register(record_id: str, artist: str, master_path_in: Path,
              stem_paths_in: list[Path], project_zip_path: Path,
-             master_name: str) -> dict:
-    """Seal a QUEUED record whose inputs are already staged on disk
-    (STORAGE_DIR/uploads — the local stand-in for S3)."""
+             master_name: str, user_id: str | None = None) -> dict:
+    """Seal a QUEUED record whose inputs are already staged on local disk
+    (the worker fetches them from the assets store first)."""
     watermark_hex = record_id.replace("-", "")
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     master = (master_name, master_path_in.read_bytes())
@@ -207,6 +208,17 @@ def register(record_id: str, artist: str, master_path_in: Path,
 
     (rec_dir / "same_origin_report.json").write_text(json.dumps(sameorigin, indent=2))
 
+    # publish the public manifest (S3 manifests bucket / local stand-in)
+    manifest_doc = {
+        "record_id": record_id,
+        "artist": artist,
+        "sealed_at_utc": created_at,
+        "cert_subject": manifest.cert_subject(),
+        "self_attested": True,
+        "manifest": definition,
+    }
+    manifest_key, manifest_url = store.put_manifest(manifest_doc, record_id)
+
     pg.update_record_sealed(
         record_id=record_id, sealed_at=created_at,
         selfcheck=round(got_score, 3),
@@ -216,16 +228,27 @@ def register(record_id: str, artist: str, master_path_in: Path,
         release_master_sha=hashing.sha256_file(rec_dir / "master_watermarked.wav"),
         project_sha=hashing.sha256_file(logicx_path),
         manifest=definition, cert_subject=manifest.cert_subject(),
-        signed_asset_path=str(signed_path))
+        signed_asset_path=str(signed_path),
+        manifest_s3_key=manifest_key, manifest_public_url=manifest_url)
 
-    # stage the release master where heimdall can serve it
-    RELEASE.mkdir(parents=True, exist_ok=True)
-    release_path = RELEASE / f"{record_id}.wav"
-    shutil.copy2(signed_path, release_path)
+    # stage the release master in the assets store (heimdall serves or
+    # presigns it via the RELEASE_MASTER asset row)
+    owner = user_id or pg.poc_user_id()
+    release_asset_id = str(uuid.uuid4())
+    release_key = f"{owner}/{record_id}/{release_asset_id}.wav"
+    store.put_asset(signed_path, release_key)
+    pg.insert_asset(owner_user_id=owner, record_id=record_id,
+                    kind="RELEASE_MASTER", bucket=store.assets_bucket(),
+                    key=release_key, content_type="audio/wav",
+                    size_bytes=signed_path.stat().st_size,
+                    sha256=hashing.sha256_file(signed_path),
+                    original_filename=f"{Path(master_name).stem}_watermarked_signed.wav")
+    pg.mark_record_assets_attached(record_id)
+
     downloads = {"signed_master": {
         "url": f"/records/{record_id}/release",
         "filename": f"{Path(master_name).stem}_watermarked_signed.wav",
-        "size_bytes": release_path.stat().st_size,
+        "size_bytes": signed_path.stat().st_size,
     }}
 
     return {
