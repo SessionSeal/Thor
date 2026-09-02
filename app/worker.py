@@ -35,7 +35,15 @@ def process(job: dict) -> dict:
 def main() -> None:
     print(f"[thor {WORKER_ID}] polling every {POLL_SECONDS}s", flush=True)
     while True:
-        job = pg.claim_next_job(WORKER_ID)
+        try:
+            job = pg.claim_next_job(WORKER_ID)
+        except Exception as e:
+            # DB restarts and blips must never kill the worker — the pool
+            # re-establishes connections; we just wait and try again.
+            print(f"[thor] db unavailable, retrying: {e}",
+                  file=sys.stderr, flush=True)
+            time.sleep(POLL_SECONDS * 2)
+            continue
         if job is None:
             time.sleep(POLL_SECONDS)
             continue
