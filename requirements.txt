@@ -1,0 +1,4 @@
+soundfile
+numpy
+psycopg[binary,pool]
+python-dotenv
