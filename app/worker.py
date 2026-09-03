@@ -94,6 +94,14 @@ def drain_queued_jobs() -> int:
                   f"({'will retry' if retry else 'FINAL'}): {err}",
                   file=sys.stderr, flush=True)
             traceback.print_exc()
+        finally:
+            # In S3 mode the evidence bundle under STORAGE_DIR is per-job
+            # scratch: everything unique already persists in S3 (release
+            # master, manifest) or Postgres (reports, hashes, definition).
+            # Local mode keeps it — there the bundle IS the store. Retries
+            # rebuild it from S3 inputs, so deleting between attempts is safe.
+            if store.ASSETS_BUCKET:
+                shutil.rmtree(product.EVIDENCE / rid, ignore_errors=True)
 
 
 def wait_for_nudge() -> bool:
