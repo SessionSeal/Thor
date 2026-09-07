@@ -14,6 +14,10 @@ from pathlib import Path
 ASSETS_BUCKET = os.environ.get("S3_ASSETS_BUCKET") or None
 MANIFESTS_BUCKET = os.environ.get("S3_MANIFESTS_BUCKET") or None
 AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
+# Public base for manifest URLs. Defaults to the raw S3 endpoint; set to
+# https://manifests.sessionseal.com (Cloudflare-fronted bucket) to serve
+# manifests from the branded domain. No trailing slash.
+MANIFESTS_PUBLIC_BASE = (os.environ.get("MANIFESTS_PUBLIC_BASE") or "").rstrip("/") or None
 STORAGE_DIR = Path(os.environ.get(
     "STORAGE_DIR",
     Path(__file__).resolve().parent.parent.parent / "_localstore"))
@@ -58,7 +62,9 @@ def put_manifest(doc: dict, record_id: str) -> tuple[str, str]:
     if MANIFESTS_BUCKET:
         _s3.put_object(Bucket=MANIFESTS_BUCKET, Key=key, Body=body,
                        ContentType="application/json")
-        url = f"https://{MANIFESTS_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+        base = MANIFESTS_PUBLIC_BASE or \
+            f"https://{MANIFESTS_BUCKET}.s3.{AWS_REGION}.amazonaws.com"
+        url = f"{base}/{key}"
     else:
         dest = STORAGE_DIR / "manifests" / key
         dest.parent.mkdir(parents=True, exist_ok=True)
