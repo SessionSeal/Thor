@@ -1,4 +1,4 @@
-"""End-to-end product pipeline (POC).
+"""End-to-end seal pipeline.
 
 register():
   1. verify stems <-> master coherence and logicx <-> stems/master
@@ -98,8 +98,8 @@ def _build_manifest(record_id: str, created_at: str, *, master_sha: str,
                  "when": created_at,
                  "digitalSourceType":
                      "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture",
-                 "softwareAgent": {"name": "music-provenance-product-poc",
-                                   "version": "0.1.0"},
+                 "softwareAgent": {"name": manifest.APP_NAME,
+                                   "version": manifest.APP_VERSION},
              }]}},
             {"label": "c2pa.soft-binding",
              "data": {"alg": "chromaprint",
@@ -129,9 +129,10 @@ def _build_manifest(record_id: str, created_at: str, *, master_sha: str,
                  "same_origin": sameorigin_summary,
                  "signer_disclosure": {
                      "self_attested": True,
-                     "note": "signed with a self-attested development "
-                             "certificate on no trust list; verifiers will "
-                             "report the signer as untrusted",
+                     "note": "signed with a self-attested certificate not yet "
+                             "on the C2PA trust list; verifiers will report "
+                             "the signer as untrusted until a CA-issued "
+                             "certificate is in place",
                  },
                  "claims": {
                      "proves": ["custody", "integrity", "coherence", "priority"],
@@ -215,7 +216,8 @@ def register(record_id: str, artist: str, master_path_in: Path,
         "sealed_at_utc": created_at,
         "cert_subject": manifest.cert_subject(),
         "self_attested": True,
-        "manifest": definition,
+        # published copy MUST NOT include the signing key/cert paths
+        "manifest": manifest.published_view(definition),
     }
     manifest_key, manifest_url = store.put_manifest(manifest_doc, record_id)
 
@@ -268,8 +270,9 @@ def register(record_id: str, artist: str, master_path_in: Path,
             "cert_subject": manifest.cert_subject(),
             "self_attested": True,
             "logicx_hard_binding": "signed SHA-256 commitment in the manifest",
-            "trust_note": "self-attested dev certificate; verifiers report "
-                          "signingCredential.untrusted (expected)",
+            "trust_note": "self-attested certificate not yet on the C2PA "
+                          "trust list; verifiers report "
+                          "signingCredential.untrusted until a CA cert is set",
         },
         "signed_asset": str(signed_path),
         "proves": "custody, integrity, coherence, priority",
