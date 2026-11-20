@@ -10,6 +10,7 @@ deleted on receipt: they carry no state, the DB does. Run:
 """
 
 import json
+import math
 import os
 import socket
 import sys
@@ -75,11 +76,15 @@ def drain_queued_jobs() -> int:
             traceback.print_exc()
 
 
-def wait_for_nudge() -> bool:
-    """Long-poll SQS (doubles as the idle sleep). True if nudged."""
+def wait_for_nudge(max_wait_s: float) -> bool:
+    """Long-poll SQS (doubles as the idle sleep). True if nudged.
+
+    The wait is capped at max_wait_s so the DB fallback deadline is honoured
+    exactly (SQS allows 0-20 s)."""
+    wait = max(0, min(20, math.ceil(max_wait_s)))  # ceil: no busy-spin
     try:
         resp = _sqs.receive_message(QueueUrl=SQS_URL, MaxNumberOfMessages=10,
-                                    WaitTimeSeconds=20)
+                                    WaitTimeSeconds=wait)
     except Exception as e:
         print(f"[thor] sqs receive failed, falling back to db poll: {e}",
               file=sys.stderr, flush=True)
@@ -107,7 +112,8 @@ def main() -> None:
             if drain_queued_jobs() == 0:
                 time.sleep(POLL_SECONDS)
             continue
-        nudged = wait_for_nudge()
+        remaining = FALLBACK_POLL_SECONDS - (time.time() - last_fallback)
+        nudged = wait_for_nudge(remaining) if remaining > 0 else False
         if nudged or time.time() - last_fallback >= FALLBACK_POLL_SECONDS:
             last_fallback = time.time()
             drain_queued_jobs()
